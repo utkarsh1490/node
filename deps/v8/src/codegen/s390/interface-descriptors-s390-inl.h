@@ -314,7 +314,8 @@ CallApiCallbackOptimizedDescriptor::ActualArgumentsCountRegister() {
   return r4;
 }
 // static
-constexpr Register CallApiCallbackOptimizedDescriptor::CallDataRegister() {
+constexpr Register
+CallApiCallbackOptimizedDescriptor::FunctionTemplateInfoRegister() {
   return r5;
 }
 // static
@@ -384,7 +385,7 @@ constexpr auto RunMicrotasksEntryDescriptor::registers() {
 
 constexpr auto WasmJSToWasmWrapperDescriptor::registers() {
   // Arbitrarily picked register.
-  return RegisterArray(r2);
+  return RegisterArray(r9);
 }
 }  // namespace internal
 }  // namespace v8

@@ -291,6 +291,7 @@ class ParserBase {
   int loop_nesting_depth() const {
     return function_state_->loop_nesting_depth();
   }
+  int PeekNextFunctionLiteralId() { return function_literal_id_ + 1; }
   int GetNextFunctionLiteralId() { return ++function_literal_id_; }
   int GetLastFunctionLiteralId() const { return function_literal_id_; }
 
@@ -607,12 +608,11 @@ class ParserBase {
     bool has_seen_constructor = false;
     bool has_static_computed_names = false;
     bool has_static_elements = false;
-    bool has_static_private_methods = false;
+    bool has_static_private_methods_or_accessors = false;
     bool has_static_blocks = false;
     bool has_instance_members = false;
     bool requires_brand = false;
     bool is_anonymous = false;
-    bool has_private_methods = false;
     DeclarationScope* static_elements_scope = nullptr;
     DeclarationScope* instance_members_scope = nullptr;
     int computed_field_count = 0;
@@ -868,6 +868,10 @@ class ParserBase {
     return (peek() == Token::kSemicolon) ? peek_end_position() : end_position();
   }
 
+  V8_INLINE Token::Value PeekAheadAhead() {
+    return scanner()->PeekAheadAhead();
+  }
+
   V8_INLINE Token::Value PeekAhead() { return scanner()->PeekAhead(); }
 
   V8_INLINE Token::Value Next() { return scanner()->Next(); }
@@ -1094,7 +1098,7 @@ class ParserBase {
     // since they open a new scope.
     return scope()->scope_type() != SCRIPT_SCOPE;
   }
-  bool IfNextUsingKeyword() {
+  bool IfNextUsingKeyword(Token::Value token_after_using) {
     // If the token after `using` is `of` or `in`, `using` is an identifier
     // and not a declaration token.
     // `of`: for ( [lookahead ≠ using of] ForDeclaration[?Yield, ?Await, +Using]
@@ -1106,9 +1110,14 @@ class ParserBase {
     // `{` or `[`: using [no LineTerminator here] [lookahead ≠ await]
     // ForBinding[?Yield, ?Await, ~Pattern]
     return (v8_flags.js_explicit_resource_management &&
-            PeekAhead() != Token::kLeftBracket &&
-            PeekAhead() != Token::kLeftBrace && PeekAhead() != Token::kOf &&
-            PeekAhead() != Token::kIn);
+            token_after_using != Token::kLeftBracket &&
+            token_after_using != Token::kLeftBrace &&
+            token_after_using != Token::kOf && token_after_using != Token::kIn);
+  }
+  bool IfStartsWithUsingKeyword() {
+    return ((peek() == Token::kUsing && IfNextUsingKeyword(PeekAhead())) ||
+            (peek() == Token::kAwait && PeekAhead() == Token::kUsing &&
+             IfNextUsingKeyword(PeekAheadAhead())));
   }
   const PendingCompilationErrorHandler* pending_error_handler() const {
     return pending_error_handler_;
@@ -1277,7 +1286,8 @@ class ParserBase {
   }
   ExpressionT DoParseMemberExpressionContinuation(ExpressionT expression);
 
-  ExpressionT ParseArrowFunctionLiteral(const FormalParametersT& parameters);
+  ExpressionT ParseArrowFunctionLiteral(const FormalParametersT& parameters,
+                                        int function_literal_id);
   void ParseAsyncFunctionBody(Scope* scope, StatementListT* body);
   ExpressionT ParseAsyncFunctionLiteral();
   ExpressionT ParseClassExpression(Scope* outer_scope);
@@ -1642,11 +1652,13 @@ class ParserBase {
         Scanner::Location::invalid();
     MessageTemplate strict_parameter_error_message = MessageTemplate::kNone;
     DeclarationScope* scope = nullptr;
+    int function_literal_id = -1;
 
     bool HasInitialState() const { return scope == nullptr; }
 
     void Reset() {
       scope = nullptr;
+      function_literal_id = -1;
       ClearStrictParameterError();
       DCHECK(HasInitialState());
     }
@@ -1665,7 +1677,6 @@ class ParserBase {
   NextArrowFunctionInfo next_arrow_function_info_;
 
   bool accept_IN_ = true;
-
   bool allow_eval_cache_ = true;
 };
 
@@ -2014,13 +2025,16 @@ ParserBase<Impl>::ParsePrimaryExpression() {
     }
 
     if (V8_UNLIKELY(peek() == Token::kArrow)) {
-      ArrowHeadParsingScope parsing_scope(impl(), kind);
+      ArrowHeadParsingScope parsing_scope(impl(), kind,
+                                          PeekNextFunctionLiteralId());
       IdentifierT name = ParseAndClassifyIdentifier(token);
       ClassifyParameter(name, beg_pos, end_position());
       ExpressionT result =
           impl()->ExpressionFromIdentifier(name, beg_pos, InferName::kNo);
       parsing_scope.SetInitializers(0, peek_position());
       next_arrow_function_info_.scope = parsing_scope.ValidateAndCreateScope();
+      next_arrow_function_info_.function_literal_id =
+          parsing_scope.function_literal_id();
       return result;
     }
 
@@ -2077,10 +2091,13 @@ ParserBase<Impl>::ParsePrimaryExpression() {
         if (peek() != Token::kArrow) ReportUnexpectedToken(Token::kRightParen);
         next_arrow_function_info_.scope =
             NewFunctionScope(FunctionKind::kArrowFunction);
+        next_arrow_function_info_.function_literal_id =
+            GetNextFunctionLiteralId();
         return factory()->NewEmptyParentheses(beg_pos);
       }
       Scope::Snapshot scope_snapshot(scope());
-      ArrowHeadParsingScope maybe_arrow(impl(), FunctionKind::kArrowFunction);
+      ArrowHeadParsingScope maybe_arrow(impl(), FunctionKind::kArrowFunction,
+                                        PeekNextFunctionLiteralId());
       // Heuristically try to detect immediately called functions before
       // seeing the call parentheses.
       if (peek() == Token::kFunction ||
@@ -2094,6 +2111,8 @@ ParserBase<Impl>::ParsePrimaryExpression() {
 
       if (peek() == Token::kArrow) {
         next_arrow_function_info_.scope = maybe_arrow.ValidateAndCreateScope();
+        next_arrow_function_info_.function_literal_id =
+            maybe_arrow.function_literal_id();
         scope_snapshot.Reparent(next_arrow_function_info_.scope);
       } else {
         maybe_arrow.ValidateExpression();
@@ -2667,7 +2686,9 @@ typename ParserBase<Impl>::BlockT ParserBase<Impl>::ParseClassStaticBlock(
   // Each static block has its own var and lexical scope, so make a new var
   // block scope instead of using the synthetic members initializer function
   // scope.
-  BlockT static_block = ParseBlock(nullptr, NewVarblockScope());
+  DeclarationScope* static_block_var_scope = NewVarblockScope();
+  BlockT static_block = ParseBlock(nullptr, static_block_var_scope);
+  CheckConflictingVarDeclarations(static_block_var_scope);
   class_info->has_static_elements = true;
   return static_block;
 }
@@ -3062,6 +3083,7 @@ ParserBase<Impl>::ParseAssignmentExpressionCoverGrammarContinuation(
     }
 
     DeclarationScope* scope = next_arrow_function_info_.scope;
+    int function_literal_id = next_arrow_function_info_.function_literal_id;
     scope->set_start_position(lhs_beg_pos);
 
     FormalParametersT parameters(scope);
@@ -3072,8 +3094,16 @@ ParserBase<Impl>::ParseAssignmentExpressionCoverGrammarContinuation(
     next_arrow_function_info_.Reset();
 
     impl()->DeclareArrowFunctionFormalParameters(&parameters, expression, loc);
+    // function_literal_id was reserved for the arrow function, but not actaully
+    // allocated. This comparison allocates a function literal id for the arrow
+    // function, and checks whether it's still the function id we wanted. If
+    // not, we'll reindex the arrow function formal parameters to shift them all
+    // 1 down to make space for the arrow function.
+    if (function_literal_id != GetNextFunctionLiteralId()) {
+      impl()->ReindexArrowFunctionFormalParameters(&parameters);
+    }
 
-    expression = ParseArrowFunctionLiteral(parameters);
+    expression = ParseArrowFunctionLiteral(parameters, function_literal_id);
 
     return expression;
   }
@@ -3652,8 +3682,8 @@ ParserBase<Impl>::ParseLeftHandSideContinuation(ExpressionT result) {
     DCHECK(impl()->IsAsync(impl()->AsIdentifier(result)));
     int pos = position();
 
-    ArrowHeadParsingScope maybe_arrow(impl(),
-                                      FunctionKind::kAsyncArrowFunction);
+    ArrowHeadParsingScope maybe_arrow(impl(), FunctionKind::kAsyncArrowFunction,
+                                      PeekNextFunctionLiteralId());
     Scope::Snapshot scope_snapshot(scope());
 
     ExpressionListT args(pointer_buffer());
@@ -3662,6 +3692,8 @@ ParserBase<Impl>::ParseLeftHandSideContinuation(ExpressionT result) {
     if (V8_LIKELY(peek() == Token::kArrow)) {
       fni_.RemoveAsyncKeywordFromEnd();
       next_arrow_function_info_.scope = maybe_arrow.ValidateAndCreateScope();
+      next_arrow_function_info_.function_literal_id =
+          maybe_arrow.function_literal_id();
       scope_snapshot.Reparent(next_arrow_function_info_.scope);
       // async () => ...
       if (!args.length()) return factory()->NewEmptyParentheses(pos);
@@ -4180,7 +4212,7 @@ void ParserBase<Impl>::ParseVariableDeclarations(
     DeclarationParsingResult* parsing_result,
     ZonePtrList<const AstRawString>* names) {
   // VariableDeclarations ::
-  //   ('var' | 'const' | 'let' | 'using') (Identifier ('='
+  //   ('var' | 'const' | 'let' | 'using' | 'await using') (Identifier ('='
   //   AssignmentExpression)?)+[',']
   //
   // ES6:
@@ -4211,14 +4243,26 @@ void ParserBase<Impl>::ParseVariableDeclarations(
       // using [no LineTerminator here] [lookahead ≠ await] BindingList[?In,
       // ?Yield, ?Await, ~Pattern] ;
       Consume(Token::kUsing);
-      DCHECK_NE(var_context, kStatement);
       DCHECK(v8_flags.js_explicit_resource_management);
+      DCHECK_NE(var_context, kStatement);
       DCHECK(is_using_allowed());
       DCHECK(peek() != Token::kAwait);
       DCHECK(!scanner()->HasLineTerminatorBeforeNext());
-      DCHECK(PeekAhead() != Token::kLeftBracket &&
-             PeekAhead() != Token::kLeftBrace);
+      DCHECK(peek() != Token::kLeftBracket && peek() != Token::kLeftBrace);
       parsing_result->descriptor.mode = VariableMode::kUsing;
+      break;
+    case Token::kAwait:
+      // CoverAwaitExpressionAndAwaitUsingDeclarationHead[?Yield] [no
+      // LineTerminator here] BindingList[?In, ?Yield, +Await, ~Pattern];
+      Consume(Token::kAwait);
+      DCHECK(v8_flags.js_explicit_resource_management);
+      DCHECK_NE(var_context, kStatement);
+      DCHECK(is_using_allowed());
+      DCHECK(is_await_allowed());
+      Consume(Token::kUsing);
+      DCHECK(!scanner()->HasLineTerminatorBeforeNext());
+      DCHECK(peek() != Token::kLeftBracket && peek() != Token::kLeftBrace);
+      parsing_result->descriptor.mode = VariableMode::kAwaitUsing;
       break;
     default:
       UNREACHABLE();  // by current callers
@@ -4263,7 +4307,8 @@ void ParserBase<Impl>::ParseVariableDeclarations(
         impl()->DeclareIdentifier(name, decl_pos);
         pattern = impl()->NullExpression();
       }
-    } else if (parsing_result->descriptor.mode != VariableMode::kUsing) {
+    } else if (parsing_result->descriptor.mode != VariableMode::kUsing &&
+               parsing_result->descriptor.mode != VariableMode::kAwaitUsing) {
       name = impl()->NullIdentifier();
       pattern = ParseBindingPattern();
       DCHECK(!impl()->IsIdentifier(pattern));
@@ -4483,7 +4528,7 @@ typename ParserBase<Impl>::StatementT ParserBase<Impl>::ParseClassDeclaration(
   // so rewrite it as such.
 
   int class_token_pos = position();
-  IdentifierT name = impl()->NullIdentifier();
+  IdentifierT name = impl()->EmptyIdentifierString();
   bool is_strict_reserved = Token::IsStrictReservedWord(peek());
   IdentifierT variable_name = impl()->NullIdentifier();
   if (default_export &&
@@ -4729,6 +4774,7 @@ bool ParserBase<Impl>::IsNextLetKeyword() {
     case Token::kSet:
     case Token::kOf:
     case Token::kUsing:
+    case Token::kAccessor:
     case Token::kAsync:
       return true;
     case Token::kFutureStrictReservedWord:
@@ -4747,7 +4793,7 @@ bool ParserBase<Impl>::IsNextLetKeyword() {
 template <typename Impl>
 typename ParserBase<Impl>::ExpressionT
 ParserBase<Impl>::ParseArrowFunctionLiteral(
-    const FormalParametersT& formal_parameters) {
+    const FormalParametersT& formal_parameters, int function_literal_id) {
   RCS_SCOPE(runtime_call_stats_,
             Impl::IsPreParser()
                 ? RuntimeCallCounterId::kPreParseArrowFunctionLiteral
@@ -4769,7 +4815,6 @@ ParserBase<Impl>::ParseArrowFunctionLiteral(
 
   int expected_property_count = 0;
   int suspend_count = 0;
-  int function_literal_id = GetNextFunctionLiteralId();
 
   FunctionKind kind = formal_parameters.scope->function_kind();
   FunctionLiteral::EagerCompileHint eager_compile_hint =
@@ -4924,7 +4969,7 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassExpression(
     Scope* outer_scope) {
   Consume(Token::kClass);
   int class_token_pos = position();
-  IdentifierT name = impl()->NullIdentifier();
+  IdentifierT name = impl()->EmptyIdentifierString();
   bool is_strict_reserved_name = false;
   Scanner::Location class_name_location = Scanner::Location::invalid();
   if (peek_any_identifier()) {
@@ -4941,7 +4986,7 @@ template <typename Impl>
 typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassLiteral(
     Scope* outer_scope, IdentifierT name, Scanner::Location class_name_location,
     bool name_is_strict_reserved, int class_token_pos) {
-  bool is_anonymous = impl()->IsNull(name);
+  bool is_anonymous = impl()->IsEmptyIdentifier(name);
 
   // All parts of a ClassDeclaration and ClassExpression are strict code.
   if (!impl()->HasCheckedSyntax() && !is_anonymous) {
@@ -5021,9 +5066,12 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassLiteralBody(
     if (V8_UNLIKELY(prop_info.is_private)) {
       DCHECK(!is_constructor);
       class_info.requires_brand |= (!is_field && !prop_info.is_static);
-      bool is_method = property_kind == ClassLiteralProperty::METHOD;
-      class_info.has_private_methods |= is_method;
-      class_info.has_static_private_methods |= is_method && prop_info.is_static;
+      if (prop_info.is_static) {
+        class_info.has_static_private_methods_or_accessors |=
+            property_kind == ClassLiteralProperty::METHOD ||
+            property_kind == ClassLiteralProperty::GETTER ||
+            property_kind == ClassLiteralProperty::SETTER;
+      }
       impl()->DeclarePrivateClassMember(class_scope, prop_info.name, property,
                                         property_kind, prop_info.is_static,
                                         &class_info);
@@ -5452,6 +5500,7 @@ ParserBase<Impl>::ParseStatementListItem() {
   // LexicalDeclaration[In, Yield, Await] :
   //   LetOrConst BindingList[?In, ?Yield, ?Await, +Pattern] ;
   //   UsingDeclaration[?In, ?Yield, ?Await, ~Pattern];
+  //   [+Await] AwaitUsingDeclaration[?In, ?Yield];
 
   switch (peek()) {
     case Token::kFunction:
@@ -5473,6 +5522,19 @@ ParserBase<Impl>::ParseStatementListItem() {
       if (!(scanner()->HasLineTerminatorAfterNext()) &&
           PeekAhead() != Token::kAwait && PeekAhead() != Token::kLeftBracket &&
           PeekAhead() != Token::kLeftBrace) {
+        return ParseVariableStatement(kStatementListItem, nullptr);
+      }
+      break;
+    case Token::kAwait:
+      if (!v8_flags.js_explicit_resource_management) break;
+      if (!is_await_allowed()) break;
+      if (!is_using_allowed()) break;
+      if (!(scanner()->HasLineTerminatorAfterNext()) &&
+          PeekAhead() == Token::kUsing &&
+          !(scanner()->HasLineTerminatorAfterNextNext()) &&
+          PeekAheadAhead() != Token::kLeftBracket &&
+          PeekAheadAhead() != Token::kLeftBrace &&
+          Token::IsAnyIdentifier(PeekAheadAhead())) {
         return ParseVariableStatement(kStatementListItem, nullptr);
       }
       break;
@@ -6278,19 +6340,7 @@ typename ParserBase<Impl>::StatementT ParserBase<Impl>::ParseForStatement(
   Expect(Token::kLeftParen);
 
   bool starts_with_let = peek() == Token::kLet;
-
-  // If the token after `using` is `of` or `in`, `using` is an identifier
-  // and not a declaration token.
-  // `of`: for ( [lookahead ≠ using of] ForDeclaration[?Yield, ?Await, +Using]
-  //       of AssignmentExpression[+In, ?Yield, ?Await] )
-  // `in`: for ( ForDeclaration[?Yield, ?Await, ~Using] in
-  //       Expression[+In, ?Yield, ?Await] )
-  // If the token after `using` is `{` or `[`, it
-  // shows a pattern after `using` which is not applicable.
-  // `{` or `[`: using [no LineTerminator here] [lookahead ≠ await]
-  // ForBinding[?Yield, ?Await, ~Pattern]
-  bool starts_with_using_keyword =
-      (peek() == Token::kUsing) && IfNextUsingKeyword();
+  bool starts_with_using_keyword = IfStartsWithUsingKeyword();
   if (peek() == Token::kConst || (starts_with_let && IsNextLetKeyword()) ||
       starts_with_using_keyword) {
     // The initializer contains lexical declarations,
@@ -6658,7 +6708,7 @@ typename ParserBase<Impl>::StatementT ParserBase<Impl>::ParseForAwaitStatement(
 
   bool starts_with_let = peek() == Token::kLet;
   if (peek() == Token::kVar || peek() == Token::kConst ||
-      (starts_with_let && IsNextLetKeyword())) {
+      (starts_with_let && IsNextLetKeyword()) || IfStartsWithUsingKeyword()) {
     // The initializer contains declarations
     // 'for' 'await' '(' ForDeclaration 'of' AssignmentExpression ')'
     //     Statement

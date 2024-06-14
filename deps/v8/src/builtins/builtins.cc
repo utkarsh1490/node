@@ -143,7 +143,7 @@ void Builtins::set_code(Builtin builtin, Tagged<Code> code) {
 
 Tagged<Code> Builtins::code(Builtin builtin) {
   Address ptr = isolate_->builtin_table()[Builtins::ToInt(builtin)];
-  return Code::cast(Tagged<Object>(ptr));
+  return Cast<Code>(Tagged<Object>(ptr));
 }
 
 Handle<Code> Builtins::code_handle(Builtin builtin) {
@@ -378,7 +378,7 @@ void Builtins::EmitCodeCreateEvents(Isolate* isolate) {
   HandleScope scope(isolate);
   for (; i < ToInt(Builtin::kFirstBytecodeHandler); i++) {
     Handle<Code> builtin_code(&builtins[i]);
-    Handle<AbstractCode> code = Handle<AbstractCode>::cast(builtin_code);
+    Handle<AbstractCode> code = Cast<AbstractCode>(builtin_code);
     PROFILE(isolate, CodeCreateEvent(LogEventListener::CodeTag::kBuiltin, code,
                                      Builtins::name(FromInt(i))));
   }
@@ -386,7 +386,7 @@ void Builtins::EmitCodeCreateEvents(Isolate* isolate) {
   static_assert(kLastBytecodeHandlerPlusOne == kBuiltinCount);
   for (; i < kBuiltinCount; i++) {
     Handle<Code> builtin_code(&builtins[i]);
-    Handle<AbstractCode> code = Handle<AbstractCode>::cast(builtin_code);
+    Handle<AbstractCode> code = Cast<AbstractCode>(builtin_code);
     interpreter::Bytecode bytecode =
         builtin_metadata[i].data.bytecode_and_scale.bytecode;
     interpreter::OperandScale scale =
@@ -490,7 +490,8 @@ CodeEntrypointTag Builtins::EntrypointTagFor(Builtin builtin) {
 }
 
 // static
-bool Builtins::AllowDynamicFunction(Isolate* isolate, Handle<JSFunction> target,
+bool Builtins::AllowDynamicFunction(Isolate* isolate,
+                                    DirectHandle<JSFunction> target,
                                     Handle<JSObject> target_global_proxy) {
   if (v8_flags.allow_unsafe_function_constructor) return true;
   HandleScopeImplementer* impl = isolate->handle_scope_implementer();

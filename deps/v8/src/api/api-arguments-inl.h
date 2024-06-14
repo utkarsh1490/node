@@ -44,7 +44,7 @@ Handle<V> CustomArguments<T>::GetReturnValue(Isolate* isolate) const {
   Tagged<Object> raw_object = *slot;
   if (IsTheHole(raw_object, isolate)) return Handle<V>();
   DCHECK(IsApiCallResultType(raw_object));
-  return Handle<V>::cast(Handle<Object>(slot.location()));
+  return Cast<V>(Handle<Object>(slot.location()));
 }
 
 template <typename T>
@@ -57,11 +57,11 @@ Handle<V> CustomArguments<T>::GetReturnValueNoHoleCheck(
   // return value to the hole.
   CHECK(!IsTheHole(*slot, isolate));
   DCHECK(IsApiCallResultType(*slot));
-  return Handle<V>::cast(Handle<Object>(slot.location()));
+  return Cast<V>(Handle<Object>(slot.location()));
 }
 
 inline Tagged<JSObject> PropertyCallbackArguments::holder() const {
-  return JSObject::cast(*slot_at(T::kHolderIndex));
+  return Cast<JSObject>(*slot_at(T::kHolderIndex));
 }
 
 inline Tagged<Object> PropertyCallbackArguments::receiver() const {
@@ -69,7 +69,7 @@ inline Tagged<Object> PropertyCallbackArguments::receiver() const {
 }
 
 inline Tagged<JSReceiver> FunctionCallbackArguments::holder() const {
-  return JSReceiver::cast(*slot_at(T::kHolderIndex));
+  return Cast<JSReceiver>(*slot_at(T::kHolderIndex));
 }
 
 #define DCHECK_NAME_COMPATIBLE(interceptor, name) \
@@ -103,7 +103,6 @@ Handle<Object> FunctionCallbackArguments::Call(
   RCS_SCOPE(isolate, RuntimeCallCounterId::kFunctionCallback);
   v8::FunctionCallback f =
       reinterpret_cast<v8::FunctionCallback>(function->callback(isolate));
-  Handle<Object> receiver_check_unsupported;
   if (isolate->should_check_side_effects() &&
       !isolate->debug()->PerformSideEffectCheckForCallback(
           handle(function, isolate))) {
@@ -141,8 +140,10 @@ Handle<Object> PropertyCallbackArguments::CallNamedQuery(
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedQueryCallback);
-  Handle<Object> receiver_check_unsupported;
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertyQueryCallback f =
         ToCData<NamedPropertyQueryCallback>(interceptor->query());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Integer, interceptor);
@@ -159,40 +160,46 @@ Handle<Object> PropertyCallbackArguments::CallNamedQuery(
   }
 }
 
-Handle<Object> PropertyCallbackArguments::CallNamedGetter(
+Handle<JSAny> PropertyCallbackArguments::CallNamedGetter(
     Handle<InterceptorInfo> interceptor, Handle<Name> name) {
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedGetterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertyGetterCallback f =
         ToCData<NamedPropertyGetterCallback>(interceptor->getter());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     auto intercepted = f(v8::Utils::ToLocal(name), callback_info);
     if (intercepted == v8::Intercepted::kNo) return {};
-    return GetReturnValueNoHoleCheck<Object>(isolate);
+    return GetReturnValueNoHoleCheck<JSAny>(isolate);
 
   } else {
     GenericNamedPropertyGetterCallback f =
         ToCData<GenericNamedPropertyGetterCallback>(interceptor->getter());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     f(v8::Utils::ToLocal(name), callback_info);
-    return GetReturnValue<Object>(isolate);
+    return GetReturnValue<JSAny>(isolate);
   }
 }
 
-Handle<Object> PropertyCallbackArguments::CallNamedDescriptor(
+Handle<JSAny> PropertyCallbackArguments::CallNamedDescriptor(
     Handle<InterceptorInfo> interceptor, Handle<Name> name) {
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedDescriptorCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertyDescriptorCallback f =
         ToCData<NamedPropertyDescriptorCallback>(interceptor->descriptor());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     auto intercepted = f(v8::Utils::ToLocal(name), callback_info);
     if (intercepted == v8::Intercepted::kNo) return {};
-    return GetReturnValueNoHoleCheck<Object>(isolate);
+    return GetReturnValueNoHoleCheck<JSAny>(isolate);
 
   } else {
     GenericNamedPropertyDescriptorCallback f =
@@ -200,18 +207,21 @@ Handle<Object> PropertyCallbackArguments::CallNamedDescriptor(
             interceptor->descriptor());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     f(v8::Utils::ToLocal(name), callback_info);
-    return GetReturnValue<Object>(isolate);
+    return GetReturnValue<JSAny>(isolate);
   }
 }
 
 // TODO(ishell): just return v8::Intercepted.
 Handle<Object> PropertyCallbackArguments::CallNamedSetter(
-    Handle<InterceptorInfo> interceptor, Handle<Name> name,
+    DirectHandle<InterceptorInfo> interceptor, Handle<Name> name,
     Handle<Object> value) {
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedSetterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertySetterCallback f =
         ToCData<NamedPropertySetterCallback>(interceptor->setter());
     Handle<InterceptorInfo> has_side_effects;
@@ -234,12 +244,15 @@ Handle<Object> PropertyCallbackArguments::CallNamedSetter(
 
 // TODO(ishell): just return v8::Intercepted.
 Handle<Object> PropertyCallbackArguments::CallNamedDefiner(
-    Handle<InterceptorInfo> interceptor, Handle<Name> name,
+    DirectHandle<InterceptorInfo> interceptor, Handle<Name> name,
     const v8::PropertyDescriptor& desc) {
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedDefinerCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertyDefinerCallback f =
         ToCData<NamedPropertyDefinerCallback>(interceptor->definer());
     Handle<InterceptorInfo> has_side_effects;
@@ -261,11 +274,14 @@ Handle<Object> PropertyCallbackArguments::CallNamedDefiner(
 
 // TODO(ishell): return Handle<Boolean>
 Handle<Object> PropertyCallbackArguments::CallNamedDeleter(
-    Handle<InterceptorInfo> interceptor, Handle<Name> name) {
+    DirectHandle<InterceptorInfo> interceptor, Handle<Name> name) {
   DCHECK_NAME_COMPATIBLE(interceptor, name);
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedDeleterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     NamedPropertyDeleterCallback f =
         ToCData<NamedPropertyDeleterCallback>(interceptor->deleter());
     Handle<InterceptorInfo> has_side_effects;
@@ -302,6 +318,9 @@ Handle<Object> PropertyCallbackArguments::CallIndexedQuery(
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kIndexedQueryCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertyQueryCallbackV2 f =
         ToCData<IndexedPropertyQueryCallbackV2>(interceptor->query());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Integer, interceptor);
@@ -318,58 +337,67 @@ Handle<Object> PropertyCallbackArguments::CallIndexedQuery(
   }
 }
 
-Handle<Object> PropertyCallbackArguments::CallIndexedGetter(
+Handle<JSAny> PropertyCallbackArguments::CallIndexedGetter(
     Handle<InterceptorInfo> interceptor, uint32_t index) {
   DCHECK(!interceptor->is_named());
-  RCS_SCOPE(isolate(), RuntimeCallCounterId::kNamedGetterCallback);
+  Isolate* isolate = this->isolate();
+  RCS_SCOPE(isolate, RuntimeCallCounterId::kNamedGetterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertyGetterCallbackV2 f =
         ToCData<IndexedPropertyGetterCallbackV2>(interceptor->getter());
-    Isolate* isolate = this->isolate();
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     auto intercepted = f(index, callback_info);
     if (intercepted == v8::Intercepted::kNo) return {};
-    return GetReturnValueNoHoleCheck<Object>(isolate);
+    return GetReturnValueNoHoleCheck<JSAny>(isolate);
 
   } else {
     IndexedPropertyGetterCallback f =
         ToCData<IndexedPropertyGetterCallback>(interceptor->getter());
-    Isolate* isolate = this->isolate();
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     f(index, callback_info);
-    return GetReturnValue<Object>(isolate);
+    return GetReturnValue<JSAny>(isolate);
   }
 }
 
-Handle<Object> PropertyCallbackArguments::CallIndexedDescriptor(
+Handle<JSAny> PropertyCallbackArguments::CallIndexedDescriptor(
     Handle<InterceptorInfo> interceptor, uint32_t index) {
   DCHECK(!interceptor->is_named());
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kIndexedDescriptorCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertyDescriptorCallbackV2 f =
         ToCData<IndexedPropertyDescriptorCallbackV2>(interceptor->descriptor());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     auto intercepted = f(index, callback_info);
     if (intercepted == v8::Intercepted::kNo) return {};
-    return GetReturnValueNoHoleCheck<Object>(isolate);
+    return GetReturnValueNoHoleCheck<JSAny>(isolate);
 
   } else {
     IndexedPropertyDescriptorCallback f =
         ToCData<IndexedPropertyDescriptorCallback>(interceptor->descriptor());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Value, interceptor);
     f(index, callback_info);
-    return GetReturnValue<Object>(isolate);
+    return GetReturnValue<JSAny>(isolate);
   }
 }
 
 // TODO(ishell): just return v8::Intercepted.
 Handle<Object> PropertyCallbackArguments::CallIndexedSetter(
-    Handle<InterceptorInfo> interceptor, uint32_t index, Handle<Object> value) {
+    DirectHandle<InterceptorInfo> interceptor, uint32_t index,
+    Handle<Object> value) {
   DCHECK(!interceptor->is_named());
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kIndexedSetterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertySetterCallbackV2 f =
         ToCData<IndexedPropertySetterCallbackV2>(interceptor->setter());
     Handle<InterceptorInfo> has_side_effects;
@@ -391,12 +419,15 @@ Handle<Object> PropertyCallbackArguments::CallIndexedSetter(
 
 // TODO(ishell): just return v8::Intercepted.
 Handle<Object> PropertyCallbackArguments::CallIndexedDefiner(
-    Handle<InterceptorInfo> interceptor, uint32_t index,
+    DirectHandle<InterceptorInfo> interceptor, uint32_t index,
     const v8::PropertyDescriptor& desc) {
   DCHECK(!interceptor->is_named());
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kIndexedDefinerCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertyDefinerCallbackV2 f =
         ToCData<IndexedPropertyDefinerCallbackV2>(interceptor->definer());
     Handle<InterceptorInfo> has_side_effects;
@@ -423,6 +454,9 @@ Handle<Object> PropertyCallbackArguments::CallIndexedDeleter(
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kIndexedDeleterCallback);
   if (interceptor->has_new_callbacks_signature()) {
+    // New Api relies on the return value to be set to undefined.
+    // TODO(ishell): do this in the constructor once the old Api is deprecated.
+    slot_at(kReturnValueIndex).store(ReadOnlyRoots(isolate).undefined_value());
     IndexedPropertyDeleterCallbackV2 f =
         ToCData<IndexedPropertyDeleterCallbackV2>(interceptor->deleter());
     PREPARE_CALLBACK_INFO_INTERCEPTOR(isolate, f, v8::Boolean, interceptor);
@@ -455,8 +489,8 @@ Handle<JSObject> PropertyCallbackArguments::CallPropertyEnumerator(
 // -------------------------------------------------------------------------
 // Accessors
 
-Handle<Object> PropertyCallbackArguments::CallAccessorGetter(
-    Handle<AccessorInfo> info, Handle<Name> name) {
+Handle<JSAny> PropertyCallbackArguments::CallAccessorGetter(
+    DirectHandle<AccessorInfo> info, Handle<Name> name) {
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kAccessorGetterCallback);
   // Unlike interceptor callbacks we know that the property exists, so
@@ -468,11 +502,11 @@ Handle<Object> PropertyCallbackArguments::CallAccessorGetter(
   PREPARE_CALLBACK_INFO_ACCESSOR(isolate, f, v8::Value, info,
                                  handle(receiver(), isolate), ACCESSOR_GETTER);
   f(v8::Utils::ToLocal(name), callback_info);
-  return GetReturnValue<Object>(isolate);
+  return GetReturnValue<JSAny>(isolate);
 }
 
-Handle<Object> PropertyCallbackArguments::CallAccessorSetter(
-    Handle<AccessorInfo> accessor_info, Handle<Name> name,
+Handle<JSAny> PropertyCallbackArguments::CallAccessorSetter(
+    DirectHandle<AccessorInfo> accessor_info, Handle<Name> name,
     Handle<Object> value) {
   Isolate* isolate = this->isolate();
   RCS_SCOPE(isolate, RuntimeCallCounterId::kAccessorSetterCallback);
@@ -485,7 +519,7 @@ Handle<Object> PropertyCallbackArguments::CallAccessorSetter(
   PREPARE_CALLBACK_INFO_ACCESSOR(isolate, f, void, accessor_info,
                                  handle(receiver(), isolate), ACCESSOR_SETTER);
   f(v8::Utils::ToLocal(name), v8::Utils::ToLocal(value), callback_info);
-  return GetReturnValue<Object>(isolate);
+  return GetReturnValue<JSAny>(isolate);
 }
 
 #undef PREPARE_CALLBACK_INFO_ACCESSOR

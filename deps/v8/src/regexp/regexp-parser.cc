@@ -1333,19 +1333,31 @@ RegExpParserState* RegExpParserImpl<CharT>::ParseOpenParenthesis(
           break;
         case '=':
           Advance(2);
-          parsing_modifiers = false;
+          if (parsing_modifiers) {
+            DCHECK(v8_flags.js_regexp_modifiers);
+            ReportError(RegExpError::kInvalidGroup);
+            return nullptr;
+          }
           lookaround_type = RegExpLookaround::LOOKAHEAD;
           subexpr_type = POSITIVE_LOOKAROUND;
           break;
         case '!':
           Advance(2);
-          parsing_modifiers = false;
+          if (parsing_modifiers) {
+            DCHECK(v8_flags.js_regexp_modifiers);
+            ReportError(RegExpError::kInvalidGroup);
+            return nullptr;
+          }
           lookaround_type = RegExpLookaround::LOOKAHEAD;
           subexpr_type = NEGATIVE_LOOKAROUND;
           break;
         case '<':
           Advance();
-          parsing_modifiers = false;
+          if (parsing_modifiers) {
+            DCHECK(v8_flags.js_regexp_modifiers);
+            ReportError(RegExpError::kInvalidGroup);
+            return nullptr;
+          }
           if (Next() == '=') {
             Advance(2);
             lookaround_type = RegExpLookaround::LOOKBEHIND;
@@ -3222,7 +3234,7 @@ template class RegExpParserImpl<base::uc16>;
 
 // static
 bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
-                                             Handle<String> input,
+                                             DirectHandle<String> input,
                                              RegExpFlags flags,
                                              RegExpCompileData* result) {
   DisallowGarbageCollection no_gc;

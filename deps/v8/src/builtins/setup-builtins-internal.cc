@@ -138,8 +138,9 @@ V8_NOINLINE Tagged<Code> BuildWithMacroAssembler(
     HandlerTable::EmitReturnEntry(
         &masm, 0, isolate->builtins()->js_entry_handler_offset());
   }
-#if V8_ENABLE_WEBASSEMBLY && (V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64 || \
-                              V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_ARM)
+#if V8_ENABLE_WEBASSEMBLY &&                                              \
+    (V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_IA32 || \
+     V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_RISCV64)
   if (builtin == Builtin::kWasmReturnPromiseOnSuspendAsm) {
     handler_table_offset = HandlerTable::EmitReturnTableStart(&masm);
     HandlerTable::EmitReturnEntry(
@@ -151,10 +152,11 @@ V8_NOINLINE Tagged<Code> BuildWithMacroAssembler(
   masm.GetCode(isolate->main_thread_local_isolate(), &desc,
                MacroAssembler::kNoSafepointTable, handler_table_offset);
 
-  Handle<Code> code = Factory::CodeBuilder(isolate, desc, CodeKind::BUILTIN)
-                          .set_self_reference(masm.CodeObject())
-                          .set_builtin(builtin)
-                          .Build();
+  DirectHandle<Code> code =
+      Factory::CodeBuilder(isolate, desc, CodeKind::BUILTIN)
+          .set_self_reference(masm.CodeObject())
+          .set_builtin(builtin)
+          .Build();
 #if defined(V8_OS_WIN64)
   isolate->SetBuiltinUnwindData(builtin, masm.GetUnwindInfo());
 #endif  // V8_OS_WIN64
@@ -173,10 +175,11 @@ Tagged<Code> BuildAdaptor(Isolate* isolate, Builtin builtin,
   Builtins::Generate_Adaptor(&masm, builtin_address);
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  Handle<Code> code = Factory::CodeBuilder(isolate, desc, CodeKind::BUILTIN)
-                          .set_self_reference(masm.CodeObject())
-                          .set_builtin(builtin)
-                          .Build();
+  DirectHandle<Code> code =
+      Factory::CodeBuilder(isolate, desc, CodeKind::BUILTIN)
+          .set_self_reference(masm.CodeObject())
+          .set_builtin(builtin)
+          .Build();
   return *code;
 }
 
@@ -190,7 +193,7 @@ V8_NOINLINE Tagged<Code> BuildWithCodeStubAssemblerJS(
   compiler::CodeAssemblerState state(isolate, &zone, argc, CodeKind::BUILTIN,
                                      name, builtin);
   generator(&state);
-  Handle<Code> code = compiler::CodeAssembler::GenerateCode(
+  DirectHandle<Code> code = compiler::CodeAssembler::GenerateCode(
       &state, BuiltinAssemblerOptions(isolate, builtin),
       ProfileDataFromFile::TryRead(name));
   return *code;
@@ -210,7 +213,7 @@ V8_NOINLINE Tagged<Code> BuildWithCodeStubAssemblerCS(
   compiler::CodeAssemblerState state(isolate, &zone, descriptor,
                                      CodeKind::BUILTIN, name, builtin);
   generator(&state);
-  Handle<Code> code = compiler::CodeAssembler::GenerateCode(
+  DirectHandle<Code> code = compiler::CodeAssembler::GenerateCode(
       &state, BuiltinAssemblerOptions(isolate, builtin),
       ProfileDataFromFile::TryRead(name));
   return *code;
@@ -234,7 +237,7 @@ void SetupIsolateDelegate::PopulateWithPlaceholders(Isolate* isolate) {
   HandleScope scope(isolate);
   for (Builtin builtin = Builtins::kFirst; builtin <= Builtins::kLast;
        ++builtin) {
-    Handle<Code> placeholder = BuildPlaceholder(isolate, builtin);
+    DirectHandle<Code> placeholder = BuildPlaceholder(isolate, builtin);
     AddBuiltin(builtins, builtin, *placeholder);
   }
 }
@@ -276,7 +279,7 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
         DCHECK(RelocInfo::IsEmbeddedObjectMode(rinfo->rmode()));
         Tagged<Object> object = rinfo->target_object(cage_base);
         if (!IsCode(object, cage_base)) continue;
-        Tagged<Code> target = Code::cast(object);
+        Tagged<Code> target = Cast<Code>(object);
         if (!target->is_builtin()) continue;
         Tagged<Code> new_target = builtins->code(target->builtin_id());
         rinfo->set_target_object(istream, new_target, UPDATE_WRITE_BARRIER,
@@ -297,7 +300,7 @@ V8_NOINLINE Tagged<Code> GenerateBytecodeHandler(
     Isolate* isolate, Builtin builtin, interpreter::OperandScale operand_scale,
     interpreter::Bytecode bytecode) {
   DCHECK(interpreter::Bytecodes::BytecodeHasHandler(bytecode, operand_scale));
-  Handle<Code> code = interpreter::GenerateBytecodeHandler(
+  DirectHandle<Code> code = interpreter::GenerateBytecodeHandler(
       isolate, Builtins::name(builtin), bytecode, operand_scale, builtin,
       BuiltinAssemblerOptions(isolate, builtin));
   return *code;

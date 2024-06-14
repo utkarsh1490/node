@@ -1823,24 +1823,12 @@ class SuperCallForwardArgs final : public Expression {
 };
 
 // The CallRuntime class does not represent any official JavaScript
-// language construct. Instead it is used to call a C or JS function
-// with a set of arguments. This is used from the builtins that are
-// implemented in JavaScript.
+// language construct. Instead it is used to call a runtime function
+// with a set of arguments.
 class CallRuntime final : public Expression {
  public:
   const ZonePtrList<Expression>* arguments() const { return &arguments_; }
-  bool is_jsruntime() const { return function_ == nullptr; }
-
-  int context_index() const {
-    DCHECK(is_jsruntime());
-    return context_index_;
-  }
-  const Runtime::Function* function() const {
-    DCHECK(!is_jsruntime());
-    return function_;
-  }
-
-  const char* debug_name();
+  const Runtime::Function* function() const { return function_; }
 
  private:
   friend class AstNodeFactory;
@@ -1850,15 +1838,10 @@ class CallRuntime final : public Expression {
               const ScopedPtrList<Expression>& arguments, int pos)
       : Expression(pos, kCallRuntime),
         function_(function),
-        arguments_(arguments.ToConstVector(), zone) {}
-  CallRuntime(Zone* zone, int context_index,
-              const ScopedPtrList<Expression>& arguments, int pos)
-      : Expression(pos, kCallRuntime),
-        context_index_(context_index),
-        function_(nullptr),
-        arguments_(arguments.ToConstVector(), zone) {}
+        arguments_(arguments.ToConstVector(), zone) {
+    DCHECK_NOT_NULL(function_);
+  }
 
-  int context_index_;
   const Runtime::Function* function_;
   ZonePtrList<Expression> arguments_;
 };
@@ -2609,9 +2592,6 @@ class ClassLiteral final : public Expression {
   bool is_anonymous_expression() const {
     return IsAnonymousExpression::decode(bit_field_);
   }
-  bool has_private_methods() const {
-    return HasPrivateMethods::decode(bit_field_);
-  }
   bool IsAnonymousFunctionDefinition() const {
     return is_anonymous_expression();
   }
@@ -2638,8 +2618,7 @@ class ClassLiteral final : public Expression {
                FunctionLiteral* instance_members_initializer_function,
                int start_position, int end_position,
                bool has_static_computed_names, bool is_anonymous,
-               bool has_private_methods, Variable* home_object,
-               Variable* static_home_object)
+               Variable* home_object, Variable* static_home_object)
       : Expression(start_position, kClassLiteral),
         end_position_(end_position),
         scope_(scope),
@@ -2653,8 +2632,7 @@ class ClassLiteral final : public Expression {
         home_object_(home_object),
         static_home_object_(static_home_object) {
     bit_field_ |= HasStaticComputedNames::encode(has_static_computed_names) |
-                  IsAnonymousExpression::encode(is_anonymous) |
-                  HasPrivateMethods::encode(has_private_methods);
+                  IsAnonymousExpression::encode(is_anonymous);
   }
 
   int end_position_;
@@ -2667,7 +2645,6 @@ class ClassLiteral final : public Expression {
   FunctionLiteral* instance_members_initializer_function_;
   using HasStaticComputedNames = Expression::NextBitField<bool, 1>;
   using IsAnonymousExpression = HasStaticComputedNames::Next<bool, 1>;
-  using HasPrivateMethods = IsAnonymousExpression::Next<bool, 1>;
   Variable* home_object_;
   Variable* static_home_object_;
 };
@@ -3245,12 +3222,6 @@ class AstNodeFactory final {
     return zone_->New<CallRuntime>(zone_, function, arguments, pos);
   }
 
-  CallRuntime* NewCallRuntime(int context_index,
-                              const ScopedPtrList<Expression>& arguments,
-                              int pos) {
-    return zone_->New<CallRuntime>(zone_, context_index, arguments, pos);
-  }
-
   UnaryOperation* NewUnaryOperation(Token::Value op,
                                     Expression* expression,
                                     int pos) {
@@ -3397,13 +3368,12 @@ class AstNodeFactory final {
       FunctionLiteral* static_initializer,
       FunctionLiteral* instance_members_initializer_function,
       int start_position, int end_position, bool has_static_computed_names,
-      bool is_anonymous, bool has_private_methods, Variable* home_object,
-      Variable* static_home_object) {
+      bool is_anonymous, Variable* home_object, Variable* static_home_object) {
     return zone_->New<ClassLiteral>(
         scope, extends, constructor, public_members, private_members,
         static_initializer, instance_members_initializer_function,
         start_position, end_position, has_static_computed_names, is_anonymous,
-        has_private_methods, home_object, static_home_object);
+        home_object, static_home_object);
   }
 
   NativeFunctionLiteral* NewNativeFunctionLiteral(const AstRawString* name,
